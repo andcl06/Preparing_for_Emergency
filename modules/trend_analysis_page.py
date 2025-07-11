@@ -127,6 +127,18 @@ def trend_analysis_page():
         # 역방향 매핑 (저장된 일수를 드롭다운 선택지로 변환하기 위함)
         period_options_reverse = {v: k for k, v in period_options.items()}
 
+        # --- 최근 데이터 일수 드롭다운 옵션 및 매핑 (새로 추가) ---
+        recent_days_options = {
+            "1일": 1, "2일": 2, "3일": 3, "4일": 4, "5일": 5, "6일": 6, "7일": 7
+        }
+        recent_days_options_reverse = {v: k for k, v in recent_days_options.items()}
+
+        # --- 페이지 선택 드롭다운 옵션 및 매핑 (새로 추가) ---
+        pages_options = {
+            "1페이지": 1, "2페이지": 2, "3페이지": 3
+        }
+        pages_options_reverse = {v: k for k, v in pages_options.items()}
+
 
         with col_search_input:
             st.header("🔍 검색 조건 설정")
@@ -160,8 +172,10 @@ def trend_analysis_page():
                             st.session_state['keyword_input'] = selected_preset['keyword']
                             # total_search_days는 드롭다운 값을 반영하도록 변경
                             st.session_state['total_days_input_display'] = period_options_reverse.get(selected_preset['total_search_days'], "1달") # 기본값 설정
-                            st.session_state['recent_days_input'] = selected_preset['recent_trend_days']
-                            st.session_state['max_pages_input'] = selected_preset['max_naver_search_pages_per_day']
+                            # 최근 데이터 일수 드롭다운 값 반영 (수정)
+                            st.session_state['recent_days_input_display'] = recent_days_options_reverse.get(selected_preset['recent_trend_days'], "2일") # 기본값 2일
+                            # 페이지 선택 드롭다운 값 반영 (수정)
+                            st.session_state['max_pages_input_display'] = pages_options_reverse.get(selected_preset['max_naver_search_pages_per_day'], "1페이지") # 기본값 1페이지
                             st.session_state['selected_preset_id'] = selected_preset['id'] # 선택된 프리셋 ID 저장
                             st.info(f"✅ 프리셋 '{selected_preset_name}'이(가) 불러와졌습니다.")
                             st.rerun()
@@ -196,22 +210,26 @@ def trend_analysis_page():
                 )
                 total_search_days = period_options[selected_total_days_display] # 선택된 문자열을 일수로 변환
                 
-                # 도움말 추가: recent_trend_days
-                recent_trend_days = st.number_input(
-                    "최근 몇 일간의 데이터를 기준으로 트렌드를 분석할까요? (예: 2)",
-                    min_value=1,
-                    value=st.session_state.get('recent_days_input', 2),
-                    key="recent_days_input",
+                # --- 최근 데이터 일수 드롭다운으로 변경 (수정) ---
+                selected_recent_days_display = st.selectbox(
+                    "최근 몇 일간의 데이터를 기준으로 트렌드를 분석할까요?",
+                    options=list(recent_days_options.keys()),
+                    index=list(recent_days_options.keys()).index(st.session_state.get('recent_days_input_display', "2일")), # 기본값 2일
+                    key="recent_days_input_display",
                     help="총 검색 기간 중 최근 몇 일간의 데이터를 '최신 트렌드'로 간주하여, 이전 기간과 비교하여 키워드 언급량의 변화를 감지합니다. 이 값은 총 검색 기간보다 작아야 합니다."
                 )
-                # 웹크롤링 기본 페이지 수 1로 변경
-                max_naver_search_pages_per_day = st.number_input(
+                recent_trend_days = recent_days_options[selected_recent_days_display] # 선택된 문자열을 일수로 변환
+
+                # --- 페이지 선택 드롭다운으로 변경 (수정) ---
+                selected_max_pages_display = st.selectbox(
                     "각 날짜별로 네이버 뉴스 검색 결과 몇 페이지까지 크롤링할까요? (페이지당 10개 기사)",
-                    min_value=1,
-                    value=st.session_state.get('max_pages_input', 1), # 기본값 1로 변경
-                    key="max_pages_input",
+                    options=list(pages_options.keys()),
+                    index=list(pages_options.keys()).index(st.session_state.get('max_pages_input_display', "1페이지")), # 기본값 1페이지
+                    key="max_pages_input_display",
                     help="네이버 뉴스 검색 결과에서 각 날짜별로 크롤링할 최대 페이지 수를 설정합니다. (페이지당 약 10개의 기사)"
                 )
+                max_naver_search_pages_per_day = pages_options[selected_max_pages_display] # 선택된 문자열을 정수로 변환
+
 
                 col_submit, col_save_preset = st.columns([0.7, 0.3]) # 프리셋으로 용어 변경
                 with col_submit:
@@ -255,279 +273,286 @@ def trend_analysis_page():
                 my_bar = status_message_placeholder.progress(0, text="데이터 수집 및 분석 진행 중...")
                 status_message_placeholder.info("네이버 뉴스 메타데이터 수집 중...")
 
+                # 유효성 검사: recent_trend_days가 total_search_days보다 작아야 함
                 if recent_trend_days >= total_search_days:
                     status_message_placeholder.error("오류: 최근 트렌드 분석 기간은 총 검색 기간보다 짧아야 합니다.")
-                else:
-                    all_collected_news_metadata = []
-
-                    today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                    search_start_date = today_date - timedelta(days=total_search_days - 1)
-
-                    total_expected_articles = total_search_days * max_naver_search_pages_per_day * 10
-                    processed_article_count = 0
+                    st.session_state['analysis_completed'] = False # 분석 실패 상태
+                    st.stop() # 더 이상 진행하지 않음
 
 
-                    for i in range(total_search_days):
-                        current_search_date = search_start_date + timedelta(days=i)
-                        formatted_search_date = current_search_date.strftime('%Y-%m-%d')
+                all_collected_news_metadata = []
 
-                        daily_articles = news_crawler.crawl_naver_news_metadata(
-                            keyword,
-                            current_search_date,
-                            max_naver_search_pages_per_day
+                today_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                search_start_date = today_date - timedelta(days=total_search_days - 1)
+
+                total_expected_articles = total_search_days * max_naver_search_pages_per_day * 10
+                processed_article_count = 0
+
+
+                for i in range(total_search_days):
+                    current_search_date = search_start_date + timedelta(days=i)
+                    formatted_search_date = current_search_date.strftime('%Y-%m-%d')
+
+                    daily_articles = news_crawler.crawl_naver_news_metadata(
+                        keyword,
+                        current_search_date,
+                        max_naver_search_pages_per_day
+                    )
+
+                    for article in daily_articles:
+                        processed_article_count += 1
+                        progress_percentage = processed_article_count / total_expected_articles
+                        my_bar.progress(min(progress_percentage, 1.0), text=f"뉴스 메타데이터 수집 중... ({formatted_search_date}, {processed_article_count}개 기사 처리 완료)")
+
+
+                        article_data_for_db = {
+                            "제목": article["제목"],
+                            "링크": article["링크"],
+                            "날짜": article["날짜"].strftime('%Y-%m-%d'),
+                            "내용": article["내용"]
+                        }
+                        database_manager.insert_article(article_data_for_db)
+
+                        all_collected_news_metadata.append(article)
+
+                my_bar.empty()
+                status_message_placeholder.success(f"총 {len(all_collected_news_metadata)}개의 뉴스 메타데이터를 수집했습니다.")
+
+                # --- 2. 키워드 트렌드 분석 실행 ---
+                status_message_placeholder.info("키워드 트렌드 분석 중...")
+                with st.spinner("키워드 트렌드 분석 중..."):
+                    trending_keywords_data = trend_analyzer.analyze_keyword_trends(
+                        all_collected_news_metadata,
+                        recent_days_period=recent_trend_days,
+                        total_days_period=total_search_days
+                    )
+                st.session_state['trending_keywords_data'] = trending_keywords_data
+
+                if trending_keywords_data:
+                    # --- AI가 보험 개발자 관점에서 유의미한 키워드 선별 ---
+                    relevant_keywords_from_ai_raw = []
+                    with st.spinner("AI가 보험 개발자 관점에서 유의미한 키워드를 선별 중..."):
+                        relevant_keywords_from_ai_raw = ai_service.get_relevant_keywords(
+                            trending_keywords_data,
+                            "차량보험사의 보험개발자",
+                            POTENS_API_KEY
                         )
 
-                        for article in daily_articles:
-                            processed_article_count += 1
-                            progress_percentage = processed_article_count / total_expected_articles
-                            my_bar.progress(min(progress_percentage, 1.0), text=f"뉴스 메타데이터 수집 중... ({formatted_search_date}, {processed_article_count}개 기사 처리 완료)")
+                    filtered_trending_keywords = []
+                    if relevant_keywords_from_ai_raw:
+                        filtered_trending_keywords = [
+                            kw_data for kw_data in trending_keywords_data
+                            if kw_data['keyword'] in relevant_keywords_from_ai_raw
+                        ]
+                        filtered_trending_keywords = sorted(filtered_trending_keywords, key=lambda x: x['recent_freq'], reverse=True)
+
+                        status_message_placeholder.info(f"AI가 선별한 보험 개발자 관점의 유의미한 키워드 ({len(filtered_trending_keywords)}개): {[kw['keyword'] for kw in filtered_trending_keywords]}")
+                    else:
+                        status_message_placeholder.warning("AI가 보험 개발자 관점에서 유의미한 키워드를 선별하지 못했습니다. 모든 트렌드 키워드를 표시합니다.")
+                        filtered_trending_keywords = trending_keywords_data
+
+                    top_3_relevant_keywords = filtered_trending_keywords[:3]
+                    st.session_state['displayed_keywords'] = top_3_relevant_keywords
+
+                    if top_3_relevant_keywords:
+                        pass
+                    else:
+                        status_message_placeholder.info("보험 개발자 관점에서 유의미한 트렌드 키워드가 식별되지 않습니다.")
 
 
-                            article_data_for_db = {
-                                "제목": article["제목"],
-                                "링크": article["링크"],
-                                "날짜": article["날짜"].strftime('%Y-%m-%d'),
-                                "내용": article["내용"]
-                            }
-                            database_manager.insert_article(article_data_for_db)
+                    # --- 3. 트렌드 기사 본문 요약 (Potens.dev AI 활용) ---
+                    status_message_placeholder.info("트렌드 기사 본문 요약 중 (Potens.dev AI 호출)...")
 
-                            all_collected_news_metadata.append(article)
+                    recent_trending_articles_candidates = [
+                        article for article in all_collected_news_metadata
+                        if article.get("날짜") and today_date - timedelta(days=recent_trend_days) <= article["날짜"]
+                    ]
 
-                    my_bar.empty()
-                    status_message_placeholder.success(f"총 {len(all_collected_news_metadata)}개의 뉴스 메타데이터를 수집했습니다.")
+                    processed_links = set()
 
-                    # --- 2. 키워드 트렌드 분석 실행 ---
-                    status_message_placeholder.info("키워드 트렌드 분석 중...")
-                    with st.spinner("키워드 트렌드 분석 중..."):
-                        trending_keywords_data = trend_analyzer.analyze_keyword_trends(
-                            all_collected_news_metadata,
-                            recent_days_period=recent_trend_days,
-                            total_days_period=total_search_days
-                        )
-                    st.session_state['trending_keywords_data'] = trending_keywords_data
+                    articles_for_ai_summary = []
+                    for article in recent_trending_articles_candidates:
+                        text_for_trend_check = article["제목"] + " " + article.get("내용", "")
+                        article_keywords_for_trend = trend_analyzer.extract_keywords_from_text(text_for_trend_check)
 
-                    if trending_keywords_data:
-                        # --- AI가 보험 개발자 관점에서 유의미한 키워드 선별 ---
-                        relevant_keywords_from_ai_raw = []
-                        with st.spinner("AI가 보험 개발자 관점에서 유의미한 키워드를 선별 중..."):
-                            relevant_keywords_from_ai_raw = ai_service.get_relevant_keywords(
-                                trending_keywords_data,
-                                "차량보험사의 보험개발자",
-                                POTENS_API_KEY
+                        if any(trend_kw['keyword'] in article_keywords_for_trend for trend_kw in top_3_relevant_keywords):
+                            articles_for_ai_summary.append(article)
+
+                    total_ai_articles_to_process = len(articles_for_ai_summary)
+
+                    if total_ai_articles_to_process == 0:
+                        status_message_placeholder.info("선별된 트렌드 키워드를 포함하는 최근 기사가 없거나, AI 요약 대상 기사가 없습니다.")
+                    else:
+                        ai_progress_bar = st.progress(0, text=f"AI가 트렌드 기사를 요약 중... (0/{total_ai_articles_to_process} 완료)")
+                        ai_processed_count = 0
+
+                        temp_collected_articles = []
+                        for article in articles_for_ai_summary:
+                            if article["링크"] in processed_links:
+                                continue
+
+                            article_date_str = article["날짜"].strftime('%Y-%m-%d')
+
+                            ai_processed_content = ai_service.get_article_summary(
+                                article["제목"],
+                                article["링크"],
+                                article_date_str,
+                                article["내용"],
+                                POTENS_API_KEY,
+                                max_attempts=2
                             )
 
-                        filtered_trending_keywords = []
-                        if relevant_keywords_from_ai_raw:
-                            filtered_trending_keywords = [
-                                kw_data for kw_data in trending_keywords_data
-                                if kw_data['keyword'] in relevant_keywords_from_ai_raw
-                            ]
-                            filtered_trending_keywords = sorted(filtered_trending_keywords, key=lambda x: x['recent_freq'], reverse=True)
-
-                            status_message_placeholder.info(f"AI가 선별한 보험 개발자 관점의 유의미한 키워드 ({len(filtered_trending_keywords)}개): {[kw['keyword'] for kw in filtered_trending_keywords]}")
-                        else:
-                            status_message_placeholder.warning("AI가 보험 개발자 관점에서 유의미한 키워드를 선별하지 못했습니다. 모든 트렌드 키워드를 표시합니다.")
-                            filtered_trending_keywords = trending_keywords_data
-
-                        top_3_relevant_keywords = filtered_trending_keywords[:3]
-                        st.session_state['displayed_keywords'] = top_3_relevant_keywords
-
-                        if top_3_relevant_keywords:
-                            pass
-                        else:
-                            status_message_placeholder.info("보험 개발자 관점에서 유의미한 트렌드 키워드가 식별되지 않습니다.")
-
-
-                        # --- 3. 트렌드 기사 본문 요약 (Potens.dev AI 활용) ---
-                        status_message_placeholder.info("트렌드 기사 본문 요약 중 (Potens.dev AI 호출)...")
-
-                        recent_trending_articles_candidates = [
-                            article for article in all_collected_news_metadata
-                            if article.get("날짜") and today_date - timedelta(days=recent_trend_days) <= article["날짜"]
-                        ]
-
-                        processed_links = set()
-
-                        articles_for_ai_summary = []
-                        for article in recent_trending_articles_candidates:
-                            text_for_trend_check = article["제목"] + " " + article.get("내용", "")
-                            article_keywords_for_trend = trend_analyzer.extract_keywords_from_text(text_for_trend_check)
-
-                            if any(trend_kw['keyword'] in article_keywords_for_trend for trend_kw in top_3_relevant_keywords):
-                                articles_for_ai_summary.append(article)
-
-                        total_ai_articles_to_process = len(articles_for_ai_summary)
-
-                        if total_ai_articles_to_process == 0:
-                            status_message_placeholder.info("선별된 트렌드 키워드를 포함하는 최근 기사가 없거나, AI 요약 대상 기사가 없습니다.")
-                        else:
-                            ai_progress_bar = st.progress(0, text=f"AI가 트렌드 기사를 요약 중... (0/{total_ai_articles_to_process} 완료)")
-                            ai_processed_count = 0
-
-                            temp_collected_articles = []
-                            for article in articles_for_ai_summary:
-                                if article["링크"] in processed_links:
-                                    continue
-
-                                article_date_str = article["날짜"].strftime('%Y-%m-%d')
-
-                                ai_processed_content = ai_service.get_article_summary(
-                                    article["제목"],
-                                    article["링크"],
-                                    article_date_str,
-                                    article["내용"],
-                                    POTENS_API_KEY,
-                                    max_attempts=2
-                                )
-
-                                final_content = ""
-                                if ai_processed_content.startswith("Potens.dev AI 호출 최종 실패") or \
-                                   ai_processed_content.startswith("Potens.dev AI 호출에서 유효한 응답을 받지 못했습니다."):
-                                    final_content = f"본문 요약 실패 (AI 오류): {ai_processed_content}"
-                                    status_message_placeholder.error(f"AI 요약 실패: {final_content}")
-                                else:
-                                    final_content = ai_service.clean_ai_response_text(ai_processed_content)
-
-                                temp_collected_articles.append({
-                                    "제목": article["제목"],
-                                    "링크": article["링크"],
-                                    "날짜": article_date_str,
-                                    "내용": final_content
-                                })
-                                processed_links.add(article["링크"])
-                                time.sleep(0.1)
-
-                            ai_progress_bar.empty()
-                            st.session_state['final_collected_articles'] = temp_collected_articles
-
-                            if st.session_state['final_collected_articles']:
-                                status_message_placeholder.success(f"총 {len(st.session_state['final_collected_articles'])}개의 트렌드 기사 요약을 완료했습니다.")
-
-                                # --- 4. AI가 트렌드 요약 및 보험 상품 개발 인사이트 도출 (분리된 호출) ---
-                                status_message_placeholder.info("AI가 트렌드 요약 및 보험 상품 개발 인사이트를 도출 중 (분리된 호출)...")
-
-                                articles_for_ai_insight_generation = st.session_state['final_collected_articles']
-
-                                with st.spinner("AI가 뉴스 트렌드를 요약 중..."):
-                                    trend_summary = ai_service.get_overall_trend_summary(
-                                        articles_for_ai_insight_generation,
-                                        POTENS_API_KEY
-                                    )
-                                    st.session_state['ai_trend_summary'] = ai_service.clean_ai_response_text(trend_summary)
-                                    if st.session_state['ai_trend_summary'].startswith("요약된 기사가 없어") or \
-                                       st.session_state['ai_trend_summary'].startswith("Potens.dev AI 호출 최종 실패") or \
-                                       st.session_state['ai_trend_summary'].startswith("Potens.dev AI 호출에서 유효한 응답을 받지 못했습니다."):
-                                        status_message_placeholder.error(f"AI 트렌드 요약 실패: {st.session_state['ai_trend_summary']}")
-                                    else:
-                                        st.session_state['ai_trend_summary_ok'] = True # 성공 플래그
-                                        status_message_placeholder.success("AI 뉴스 트렌드 요약 완료!")
-                                    time.sleep(1)
-
-                                with st.spinner("AI가 자동차 보험 산업 관련 정보를 분석 중..."):
-                                    insurance_info = ai_service.get_insurance_implications_from_ai(
-                                        st.session_state['ai_trend_summary'],
-                                        POTENS_API_KEY
-                                    )
-                                    st.session_state['ai_insurance_info'] = ai_service.clean_ai_response_text(insurance_info)
-                                    if st.session_state['ai_insurance_info'].startswith("요약된 기사가 없어") or \
-                                       st.session_state['ai_insurance_info'].startswith("Potens.dev AI 호출 최종 실패") or \
-                                       st.session_state['ai_insurance_info'].startswith("Potens.dev AI 호출에서 유효한 응답을 받지 못했습니다.") or \
-                                       st.session_state['ai_insurance_info'].startswith("트렌드 요약문이 없어"):
-                                        status_message_placeholder.error(f"AI 자동차 보험 산업 관련 정보 분석 실패: {st.session_state['ai_insurance_info']}")
-                                    else:
-                                        st.session_state['ai_insurance_info_ok'] = True # 성공 플래그
-                                        status_message_placeholder.success("AI 자동차 보험 산업 관련 정보 분석 완료!")
-                                    time.sleep(1)
-
-                                # --- 5. AI가 각 섹션별로 포맷팅 (부하 분산) ---
-                                with st.spinner("AI가 뉴스 트렌드 요약 보고서를 포맷팅 중..."):
-                                    formatted_trend_summary = ai_service.format_text_with_markdown(
-                                        st.session_state['ai_trend_summary'],
-                                        POTENS_API_KEY
-                                    )
-                                    st.session_state['formatted_trend_summary'] = formatted_trend_summary
-                                    if formatted_trend_summary.startswith("AI를 통한 보고서 포맷팅 실패"):
-                                        status_message_placeholder.warning("AI 뉴스 트렌드 요약 포맷팅에 실패했습니다. 원본 텍스트가 사용됩니다.")
-                                        st.session_state['formatted_trend_summary'] = st.session_state['ai_trend_summary']
-                                    else:
-                                        status_message_placeholder.success("AI 뉴스 트렌드 요약 보고서 포맷팅 완료!")
-                                    time.sleep(1)
-
-                                with st.spinner("AI가 자동차 보험 산업 관련 정보 보고서를 포맷팅 중..."):
-                                    formatted_insurance_info = ai_service.format_text_with_markdown(
-                                        st.session_state['ai_insurance_info'],
-                                        POTENS_API_KEY
-                                    )
-                                    st.session_state['formatted_insurance_info'] = formatted_insurance_info
-                                    if formatted_insurance_info.startswith("AI를 통한 보고서 포맷팅 실패"):
-                                        status_message_placeholder.warning("AI 자동차 보험 산업 관련 정보 포맷팅에 실패했습니다. 원본 텍스트가 사용됩니다.")
-                                        st.session_state['formatted_insurance_info'] = st.session_state['ai_insurance_info']
-                                    else:
-                                        st.session_state['formatted_insurance_info_ok'] = True # 성공 플래그
-                                        status_message_placeholder.success("AI 자동차 보험 산업 관련 정보 분석 완료!")
-                                    time.sleep(1)
-
-                                # --- 6. 최종 보고서 결합 (AI 포맷팅 + 직접 구성 부록) ---
-                                final_prettified_report = ""
-                                final_prettified_report += "# 뉴스 트렌드 분석 및 보험 상품 개발 인사이트\n\n"
-                                final_prettified_report += "## 개요\n\n"
-                                final_prettified_report += "이 보고서는 최근 뉴스 트렌드를 분석하고, 이를 바탕으로 자동차 보험 상품 개발에 필요한 주요 인사이트를 제공합니다.\n\n"
-
-                                if st.session_state['formatted_trend_summary']:
-                                    final_prettified_report += "## 뉴스 트렌드 요약\n"
-                                    final_prettified_report += st.session_state['formatted_trend_summary'] + "\n\n"
-                                else:
-                                    final_prettified_report += "## 뉴스 트렌드 요약 (생성 실패)\n"
-                                    final_prettified_report += st.session_state['ai_trend_summary'] + "\n\n"
-
-                                if st.session_state['formatted_insurance_info']:
-                                    final_prettified_report += "## 자동차 보험 산업 관련 주요 사실 및 법적 책임\n"
-                                    final_prettified_report += st.session_state['formatted_insurance_info'] + "\n\n"
-                                else:
-                                    final_prettified_report += "## 자동차 보험 산업 관련 주요 사실 및 법적 책임 (생성 실패)\
-                                    \n"
-                                    final_prettified_report += st.session_state['ai_insurance_info'] + "\n\n"
-
-                                # --- 부록 섹션 추가 (AI 포맷팅 없이 직접 구성) ---
-                                final_prettified_report += "---\n\n"
-                                final_prettified_report += "## 부록\n\n"
-
-                                final_prettified_report += "### 키워드 산출 근거\n"
-                                if st.session_state['displayed_keywords']:
-                                    for kw_data in st.session_state['displayed_keywords']:
-                                        surge_ratio_display = (f'''{kw_data.get('surge_ratio'):.2f}x''' if kw_data.get('surge_ratio') != float('inf') else '새로운 트렌드')
-                                        final_prettified_report += (
-                                            f"- **키워드**: {kw_data['keyword']}\n"
-                                            f"  - 최근 언급량: {kw_data['recent_freq']}회\n"
-                                            f"  - 이전 언급량: {kw_data['past_freq']}회\n"
-                                            f"  - 증가율: {surge_ratio_display}\n\n"
-                                        )
-                                else:
-                                    final_prettified_report += "키워드 산출 근거 데이터가 없습니다.\n\n"
-
-                                final_prettified_report += "### 반영된 기사 리스트\n"
-                                if temp_collected_articles:
-                                    for i, article in enumerate(temp_collected_articles):
-                                        final_prettified_report += (
-                                            f"{i+1}. **제목**: {article['제목']}\n"
-                                            f"   **날짜**: {article['날짜']}\n"
-                                            f"   **링크**: {article['링크']}\n"
-                                            f"   **요약 내용**: {article['내용'][:150]}...\n\n"
-                                        )
-                                else:
-                                    final_prettified_report += "반영된 기사 리스트가 없습니다.\n\n"
-
-                                st.session_state['prettified_report_for_download'] = final_prettified_report
-
-
+                            final_content = ""
+                            if ai_processed_content.startswith("Potens.dev AI 호출 최종 실패") or \
+                               ai_processed_content.startswith("Potens.dev AI 호출에서 유효한 응답을 받지 못했습니다."):
+                                final_content = f"본문 요약 실패 (AI 오류): {ai_processed_content}"
+                                status_message_placeholder.error(f"AI 요약 실패: {final_content}")
                             else:
-                                status_message_placeholder.info("선별된 트렌드 키워드를 포함하는 기사가 없거나, AI 요약에 실패했습니다.")
+                                final_content = ai_service.clean_ai_response_text(ai_processed_content)
 
-                    else:
-                        status_message_placeholder.info("선택된 기간 내에 유의미한 트렌드 키워드가 없습니다.")
+                            temp_collected_articles.append({
+                                "제목": article["제목"],
+                                "링크": article["링크"],
+                                "날짜": article_date_str,
+                                "내용": final_content
+                            })
+                            processed_links.add(article["링크"])
+                            ai_processed_count += 1
+                            ai_progress_bar.progress(ai_processed_count / total_ai_articles_to_process, text=f"AI가 트렌드 기사를 요약 중... ({ai_processed_count}/{total_ai_articles_to_process} 완료)")
+                            time.sleep(0.1)
+
+                        ai_progress_bar.empty()
+                        st.session_state['final_collected_articles'] = temp_collected_articles
+
+                        if st.session_state['final_collected_articles']:
+                            status_message_placeholder.success(f"총 {len(st.session_state['final_collected_articles'])}개의 트렌드 기사 요약을 완료했습니다.")
+
+                            # --- 4. AI가 트렌드 요약 및 보험 상품 개발 인사이트 도출 (분리된 호출) ---
+                            status_message_placeholder.info("AI가 트렌드 요약 및 보험 상품 개발 인사이트를 도출 중 (분리된 호출)...")
+
+                            articles_for_ai_insight_generation = st.session_state['final_collected_articles']
+
+                            with st.spinner("AI가 뉴스 트렌드를 요약 중..."):
+                                trend_summary = ai_service.get_overall_trend_summary(
+                                    articles_for_ai_insight_generation,
+                                    POTENS_API_KEY
+                                )
+                                st.session_state['ai_trend_summary'] = ai_service.clean_ai_response_text(trend_summary)
+                                if st.session_state['ai_trend_summary'].startswith("요약된 기사가 없어") or \
+                                   st.session_state['ai_trend_summary'].startswith("Potens.dev AI 호출 최종 실패") or \
+                                   st.session_state['ai_trend_summary'].startswith("Potens.dev AI 호출에서 유효한 응답을 받지 못했습니다."):
+                                    status_message_placeholder.error(f"AI 트렌드 요약 실패: {st.session_state['ai_trend_summary']}")
+                                else:
+                                    st.session_state['ai_trend_summary_ok'] = True # 성공 플래그
+                                    status_message_placeholder.success("AI 뉴스 트렌드 요약 완료!")
+                                time.sleep(1)
+
+                            with st.spinner("AI가 자동차 보험 산업 관련 정보를 분석 중..."):
+                                insurance_info = ai_service.get_insurance_implications_from_ai(
+                                    st.session_state['ai_trend_summary'],
+                                    POTENS_API_KEY
+                                )
+                                st.session_state['ai_insurance_info'] = ai_service.clean_ai_response_text(insurance_info)
+                                if st.session_state['ai_insurance_info'].startswith("요약된 기사가 없어") or \
+                                   st.session_state['ai_insurance_info'].startswith("Potens.dev AI 호출 최종 실패") or \
+                                   st.session_state['ai_insurance_info'].startswith("Potens.dev AI 호출에서 유효한 응답을 받지 못했습니다.") or \
+                                   st.session_state['ai_insurance_info'].startswith("트렌드 요약문이 없어"):
+                                    status_message_placeholder.error(f"AI 자동차 보험 산업 관련 정보 분석 실패: {st.session_state['ai_insurance_info']}")
+                                else:
+                                    st.session_state['ai_insurance_info_ok'] = True # 성공 플래그
+                                    status_message_placeholder.success("AI 자동차 보험 산업 관련 정보 분석 완료!")
+                                time.sleep(1)
+
+                            # --- 5. AI가 각 섹션별로 포맷팅 (부하 분산) ---
+                            with st.spinner("AI가 뉴스 트렌드 요약 보고서를 포맷팅 중..."):
+                                formatted_trend_summary = ai_service.format_text_with_markdown(
+                                    st.session_state['ai_trend_summary'],
+                                    POTENS_API_KEY
+                                )
+                                st.session_state['formatted_trend_summary'] = formatted_trend_summary
+                                if formatted_trend_summary.startswith("AI를 통한 보고서 포맷팅 실패"):
+                                    status_message_placeholder.warning("AI 뉴스 트렌드 요약 포맷팅에 실패했습니다. 원본 텍스트가 사용됩니다.")
+                                    st.session_state['formatted_trend_summary'] = st.session_state['ai_trend_summary']
+                                else:
+                                    status_message_placeholder.success("AI 뉴스 트렌드 요약 보고서 포맷팅 완료!")
+                                time.sleep(1)
+
+                            with st.spinner("AI가 자동차 보험 산업 관련 정보 보고서를 포맷팅 중..."):
+                                formatted_insurance_info = ai_service.format_text_with_markdown(
+                                    st.session_state['ai_insurance_info'],
+                                    POTENS_API_KEY
+                                )
+                                st.session_state['formatted_insurance_info'] = formatted_insurance_info
+                                if formatted_insurance_info.startswith("AI를 통한 보고서 포맷팅 실패"):
+                                    status_message_placeholder.warning("AI 자동차 보험 산업 관련 정보 포맷팅에 실패했습니다. 원본 텍스트가 사용됩니다.")
+                                    st.session_state['formatted_insurance_info'] = st.session_state['ai_insurance_info']
+                                else:
+                                    st.session_state['formatted_insurance_info_ok'] = True # 성공 플래그
+                                    status_message_placeholder.success("AI 자동차 보험 산업 관련 정보 분석 완료!")
+                                time.sleep(1)
+
+                            # --- 6. 최종 보고서 결합 (AI 포맷팅 + 직접 구성 부록) ---
+                            final_prettified_report = ""
+                            final_prettified_report += "# 뉴스 트렌드 분석 및 보험 상품 개발 인사이트\n\n"
+                            final_prettified_report += "## 개요\n\n"
+                            final_prettified_report += "이 보고서는 최근 뉴스 트렌드를 분석하고, 이를 바탕으로 자동차 보험 상품 개발에 필요한 주요 인사이트를 제공합니다.\n\n"
+
+                            if st.session_state['formatted_trend_summary']:
+                                final_prettified_report += "## 뉴스 트렌드 요약\n"
+                                final_prettified_report += st.session_state['formatted_trend_summary'] + "\n\n"
+                            else:
+                                final_prettified_report += "## 뉴스 트렌드 요약 (생성 실패)\n"
+                                final_prettified_report += st.session_state['ai_trend_summary'] + "\n\n"
+
+                            if st.session_state['formatted_insurance_info']:
+                                final_prettified_report += "## 자동차 보험 산업 관련 주요 사실 및 법적 책임\n"
+                                final_prettified_report += st.session_state['formatted_insurance_info'] + "\n\n"
+                            else:
+                                final_prettified_report += "## 자동차 보험 산업 관련 주요 사실 및 법적 책임 (생성 실패)\
+                                \n"
+                                final_prettified_report += st.session_state['ai_insurance_info'] + "\n\n"
+
+                            # --- 부록 섹션 추가 (AI 포맷팅 없이 직접 구성) ---
+                            final_prettified_report += "---\n\n"
+                            final_prettified_report += "## 부록\n\n"
+
+                            final_prettified_report += "### 키워드 산출 근거\n"
+                            if st.session_state['displayed_keywords']:
+                                for kw_data in st.session_state['displayed_keywords']:
+                                    surge_ratio_display = (f'''{kw_data.get('surge_ratio'):.2f}x''' if kw_data.get('surge_ratio') != float('inf') else '새로운 트렌드')
+                                    final_prettified_report += (
+                                        f"- **키워드**: {kw_data['keyword']}\n"
+                                        f"  - 최근 언급량: {kw_data['recent_freq']}회\n"
+                                        f"  - 이전 언급량: {kw_data['past_freq']}회\n"
+                                        f"  - 증가율: {surge_ratio_display}\n\n"
+                                    )
+                            else:
+                                final_prettified_report += "키워드 산출 근거 데이터가 없습니다.\n\n"
+
+                            final_prettified_report += "### 반영된 기사 리스트\n"
+                            if temp_collected_articles:
+                                for i, article in enumerate(temp_collected_articles):
+                                    final_prettified_report += (
+                                        f"{i+1}. **제목**: {article['제목']}\n"
+                                        f"   **날짜**: {article['날짜']}\n"
+                                        f"   **링크**: {article['링크']}\n"
+                                        f"   **요약 내용**: {article['내용'][:150]}...\n\n"
+                                    )
+                            else:
+                                final_prettified_report += "반영된 기사 리스트가 없습니다.\n\n"
+
+                            st.session_state['prettified_report_for_download'] = final_prettified_report
+
+
+                        else:
+                            status_message_placeholder.info("선별된 트렌드 키워드를 포함하는 기사가 없거나, AI 요약에 실패했습니다.")
+
+                else:
+                    status_message_placeholder.info("선택된 기간 내에 유의미한 트렌드 키워드가 없습니다.")
 
                 st.session_state['submitted_flag'] = False
                 st.session_state['analysis_completed'] = True
+                database_manager.clear_intermediate_summaries() # 중간 요약 DB 초기화
                 st.rerun()
 
             # --- 결과가 이미 세션 상태에 있는 경우 표시 ---
@@ -845,4 +870,6 @@ def trend_analysis_page():
                 st.session_state['search_profiles'] = database_manager.get_search_profiles() # 프로필 목록 새로고침
                 st.session_state['scheduled_task'] = database_manager.get_scheduled_task() # 예약 정보 새로고침
                 database_manager.save_generated_endorsement("") # 데이터베이스 특약도 초기화 (새로 추가)
+                database_manager.save_document_text("") # 문서 텍스트도 초기화
                 st.rerun()
+
