@@ -60,6 +60,16 @@ def init_db():
             timestamp TEXT NOT NULL
         )
     ''')
+    # 새로 추가: 중간 요약문 저장 (임시 사용)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS intermediate_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            summary_text TEXT NOT NULL,
+            batch_id TEXT NOT NULL, -- 어떤 배치에서 생성된 요약인지 식별
+            level INTEGER NOT NULL, -- 요약 계층 (예: 1차 요약, 2차 요약)
+            timestamp TEXT NOT NULL
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -92,11 +102,12 @@ def clear_db_content():
     c = conn.cursor()
     try:
         c.execute("DELETE FROM articles")
-        # 추가: 검색 프로필, 예약 작업, 생성된 특약, 문서 텍스트도 함께 삭제
+        # 추가: 검색 프로필, 예약 작업, 생성된 특약, 문서 텍스트, 중간 요약도 함께 삭제
         c.execute("DELETE FROM search_profiles")
         c.execute("DELETE FROM scheduled_tasks")
         c.execute("DELETE FROM generated_endorsements")
         c.execute("DELETE FROM document_texts")
+        c.execute("DELETE FROM intermediate_summaries") # 새로 추가
         conn.commit()
         st.session_state['db_status_message'] = "데이터베이스의 모든 기록이 성공적으로 삭제되었습니다."
         st.session_state['db_status_type'] = "success"
@@ -269,8 +280,8 @@ def save_document_text(full_text: str):
         c.execute("DELETE FROM document_texts")
         # 새 문서 텍스트 삽입
         c.execute("INSERT INTO document_texts (full_text, timestamp) VALUES (?, ?)",
-                  (full_text, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
+                  (full_text, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))\
+        ;conn.commit()
         return True
     except Exception as e:
         print(f"오류: 문서 텍스트 저장 실패 - {e}")
@@ -290,3 +301,47 @@ def get_latest_document_text() -> str | None:
     if result:
         return result[0]
     return None
+
+# --- 중간 요약문 저장 및 로드 함수 (새로 추가) ---
+def save_intermediate_summary(summary_text: str, batch_id: str, level: int):
+    """중간 요약 텍스트를 데이터베이스에 저장합니다."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO intermediate_summaries (summary_text, batch_id, level, timestamp) VALUES (?, ?, ?, ?)",
+                  (summary_text, batch_id, level, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"오류: 중간 요약 저장 실패 - {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_intermediate_summaries(level: int, batch_id_prefix: str = "") -> list[str]:
+    """특정 계층 및 배치 접두사에 해당하는 중간 요약문들을 가져옵니다."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    if batch_id_prefix:
+        c.execute("SELECT summary_text FROM intermediate_summaries WHERE level = ? AND batch_id LIKE ? ORDER BY id",
+                  (level, f"{batch_id_prefix}%"))
+    else:
+        c.execute("SELECT summary_text FROM intermediate_summaries WHERE level = ? ORDER BY id")
+    summaries = [row[0] for row in c.fetchall()]
+    conn.close()
+    return summaries
+
+def clear_intermediate_summaries():
+    """중간 요약 테이블의 모든 내용을 삭제합니다."""
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM intermediate_summaries")
+        conn.commit()
+        print("중간 요약 테이블이 성공적으로 초기화되었습니다.")
+        return True
+    except Exception as e:
+        print(f"오류: 중간 요약 테이블 초기화 실패 - {e}")
+        return False
+    finally:
+        conn.close()

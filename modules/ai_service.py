@@ -6,6 +6,8 @@ import re
 import time
 import streamlit as st # Streamlit의 st.error, st.warning 등을 사용하기 위해 임시로 import.
                         # 실제 프로덕션에서는 이 로깅 부분을 다른 방식으로 처리하는 것이 좋습니다.
+from modules import database_manager # database_manager 모듈 임포트
+from datetime import datetime # datetime 모듈 임포트 (중간 요약 배치 ID 생성에 사용)
 
 def call_potens_api_raw(prompt_message: str, api_key: str, response_schema=None) -> dict:
     """
@@ -137,87 +139,93 @@ def get_relevant_keywords(trending_keywords_data: list[dict], perspective: str, 
     else:
         return [] # 오류 발생 시 빈 리스트 반환
 
-def summarize_long_combined_text(combined_text: str, api_key: str, 
-                                 max_length_for_direct_call: int = 1500, # 직접 호출 최대 길이 (조정 가능)
-                                 chunk_size: int = 500, # 청크 크기 (조정 가능)
-                                 delay_between_chunks: int = 10, # 청크 요약 간 지연 (조정 가능)
-                                 max_attempts: int = 2) -> str:
+def _summarize_text_batch(texts: list[str], api_key: str, batch_size: int = 3, level: int = 1, current_batch_prefix: str = "") -> list[str]:
     """
-    긴 텍스트를 받아, AI가 처리하기 쉬운 길이로 중간 요약합니다.
-    텍스트가 max_length_for_direct_call보다 길면 청크로 나누어 요약하고 합칩니다.
+    텍스트 리스트를 배치 단위로 나누어 요약하고, 그 요약문들을 반환합니다.
+    필요시 재귀적으로 요약을 수행하여 최종적으로 하나의 요약문 리스트를 만듭니다.
     """
-    if not combined_text:
-        return ""
+    if not texts:
+        return []
 
-    if len(combined_text) <= max_length_for_direct_call:
-        # 길이가 충분히 짧으면 직접 요약 요청
-        prompt = f"다음 텍스트를 간결하게 요약해 주세요.\n\n텍스트: {combined_text}"
-        # delay_seconds 인자 추가
-        response_dict = retry_ai_call(prompt, api_key=api_key, max_retries=max_attempts, delay_seconds=delay_between_chunks)
-        if "text" in response_dict:
-            return clean_ai_response_text(response_dict["text"])
-        else:
-            return f"긴 텍스트 직접 요약 실패: {response_dict.get('error', '알 수 없는 오류')}"
+    # 텍스트를 합쳐서 AI에 전달할 최대 길이 (이 함수 내에서만 적용되는 임시 제약)
+    # 너무 길면 AI가 처리하지 못하므로 적절히 조절
+    MAX_INPUT_LENGTH_FOR_BATCH_SUMMARIZATION = 1000 # 한 번의 AI 호출에 들어갈 텍스트의 최대 길이
 
-    # 텍스트가 너무 길면 청크로 나누어 요약
-    chunks = [combined_text[i:i + chunk_size] for i in range(0, len(combined_text), chunk_size)]
-    
-    summarized_chunks = []
-    for i, chunk in enumerate(chunks):
-        prompt = f"다음 텍스트를 간결하게 요약해 주세요.\n\n텍스트: {chunk}"
-        # delay_seconds 인자 추가
-        response_dict = retry_ai_call(prompt, api_key=api_key, max_retries=max_attempts, delay_seconds=delay_between_chunks)
-        
-        if "text" in response_dict:
-            summarized_chunks.append(clean_ai_response_text(response_dict["text"]))
-        else:
-            # 청크 요약 실패 시 해당 청크는 빈 문자열로 처리하거나 오류 메시지를 포함
-            summarized_chunks.append(f"[청크 {i+1} 요약 실패: {response_dict.get('error', '알 수 없는 오류')}]")
-        
-        if i < len(chunks) - 1: # 마지막 청크가 아니면 잠시 대기
-            time.sleep(delay_between_chunks)
-            
-    return " ".join(summarized_chunks)
+    summarized_batches = []
+    batch_counter = 0
 
+    # 텍스트를 배치 크기 또는 최대 입력 길이에 맞춰 그룹화
+    current_batch_texts = []
+    current_batch_length = 0
+
+    for i, text in enumerate(texts):
+        # 현재 텍스트를 추가했을 때 배치 길이가 너무 길어지면 새 배치 시작
+        if current_batch_length + len(text) > MAX_INPUT_LENGTH_FOR_BATCH_SUMMARIZATION or len(current_batch_texts) >= batch_size:
+            if current_batch_texts:
+                batch_counter += 1
+                batch_id = f"{current_batch_prefix}level{level}_batch{batch_counter}"
+                combined_batch_text = "\n\n---\n\n".join(current_batch_texts)
+
+                prompt = f"다음 텍스트들을 종합하여 간결하게 요약해 주세요. 주요 내용만 포함해 주세요.\n\n텍스트:\n{combined_batch_text}"
+                response_dict = retry_ai_call(prompt, api_key=api_key, max_retries=2, delay_seconds=10)
+                batch_summary = clean_ai_response_text(response_dict.get("text", f"배치 요약 실패 (레벨 {level}, 배치 {batch_counter})"))
+                summarized_batches.append(batch_summary)
+                database_manager.save_intermediate_summary(batch_summary, batch_id, level) # 중간 요약 저장
+
+                current_batch_texts = []
+                current_batch_length = 0
+                time.sleep(1) # AI 호출 간 딜레이
+
+        current_batch_texts.append(text)
+        current_batch_length += len(text)
+
+    # 마지막 남은 배치 처리
+    if current_batch_texts:
+        batch_counter += 1
+        batch_id = f"{current_batch_prefix}level{level}_batch{batch_counter}"
+        combined_batch_text = "\n\n---\n\n".join(current_batch_texts)
+        prompt = f"다음 텍스트들을 종합하여 간결하게 요약해 주세요. 주요 내용만 포함해 주세요.\n\n텍스트:\n{combined_batch_text}"
+        response_dict = retry_ai_call(prompt, api_key=api_key, max_retries=2, delay_seconds=10)
+        batch_summary = clean_ai_response_text(response_dict.get("text", f"배치 요약 실패 (레벨 {level}, 배치 {batch_counter})"))
+        summarized_batches.append(batch_summary)
+        database_manager.save_intermediate_summary(batch_summary, batch_id, level) # 중간 요약 저장
+
+    # 요약된 배치가 여전히 많으면 다음 계층으로 재귀 호출
+    # 최종 요약은 하나의 텍스트로 나와야 하므로, 1개 초과 시 재귀
+    if len(summarized_batches) > 1:
+        st.info(f"⏳ {level}차 요약 완료. {len(summarized_batches)}개의 요약문이 생성되었습니다. 다음 계층 요약 시작...")
+        return _summarize_text_batch(summarized_batches, api_key, batch_size, level + 1, current_batch_prefix)
+    else:
+        return summarized_batches # 최종 요약문 리스트 (1개)
 
 def get_overall_trend_summary(summarized_articles: list[dict], api_key: str, max_attempts: int = 2, delay_seconds: int = 15) -> str:
     """
     AI가 요약된 기사들을 바탕으로 전반적인 뉴스 트렌드를 요약합니다.
-    이때, 입력 텍스트가 길 경우 중간 요약 과정을 거칩니다.
+    계층적 요약 방식을 사용합니다.
     """
     if not summarized_articles:
         return "요약된 기사가 없어 뉴스 트렌드를 요약할 수 없습니다."
 
-    # 요약된 기사 내용을 하나의 긴 텍스트로 결합
-    combined_summaries = "\n\n---\n\n".join([
+    # 모든 개별 요약문 텍스트만 추출
+    initial_summaries = [
         f"제목: {art['제목']}\n날짜: {art['날짜']}\n요약: {art['내용']}"
         for art in summarized_articles
-    ])
+    ]
 
-    # 결합된 요약문이 길 경우, 중간 요약 과정을 거침
-    processed_content_for_ai = summarize_long_combined_text(
-        combined_summaries, 
-        api_key,
-        max_length_for_direct_call=1500, # 트렌드 요약에 사용할 최대 길이
-        chunk_size=500, # 중간 요약 청크 크기
-        delay_between_chunks=10 # 중간 요약 청크 간 지연
-    )
-    
-    if "요약 실패" in processed_content_for_ai or not processed_content_for_ai:
-        return f"뉴스 트렌드 요약을 위한 사전 처리 실패: {processed_content_for_ai}"
+    # 임시 DB 테이블 초기화 (새로운 전체 요약 시작 시)
+    database_manager.clear_intermediate_summaries()
 
+    st.info("⏳ 뉴스 트렌드 계층적 요약 시작...")
+    # 계층적 요약 실행 (배치 크기 3개로 시작)
+    final_summaries_list = _summarize_text_batch(initial_summaries, api_key, batch_size=3, level=1, current_batch_prefix=datetime.now().strftime('%Y%m%d%H%M%S_'))
 
-    prompt = (
-        f"다음은 최근 뉴스 기사 요약문들을 종합한 내용입니다.\n"
-        f"이 내용을 바탕으로 전반적인 뉴스 트렌드를 간결하게 요약해 주세요.\n\n"
-        f"종합된 뉴스 요약 내용:\n{processed_content_for_ai}"
-    )
-
-    response_dict = retry_ai_call(prompt, api_key=api_key, max_retries=max_attempts, delay_seconds=delay_seconds)
-    if "text" in response_dict:
-        return response_dict["text"]
+    # 최종 요약문이 하나로 나와야 함
+    if final_summaries_list and len(final_summaries_list) == 1:
+        final_trend_summary = final_summaries_list[0]
+        st.success("✅ 뉴스 트렌드 계층적 요약 완료!")
+        return final_trend_summary
     else:
-        return response_dict.get("error", "알 수 없는 오류")
+        return "뉴스 트렌드 요약에 실패했습니다. 최종 요약문이 생성되지 않았습니다."
 
 
 def get_insurance_implications_from_ai(trend_summary_text: str, api_key: str, max_attempts: int = 2, delay_seconds: int = 15) -> str:
