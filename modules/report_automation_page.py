@@ -52,8 +52,9 @@ def report_automation_page():
 
 
     # --- Streamlit Session State 초기화 (이 페이지에서 필요한 상태) ---
-    if 'search_profiles' not in st.session_state:
-        st.session_state['search_profiles'] = database_manager.get_search_profiles()
+    # search_profiles는 항상 최신 상태로 DB에서 가져오도록 변경
+    st.session_state['search_profiles'] = database_manager.get_search_profiles()
+    
     if 'scheduled_task' not in st.session_state:
         st.session_state['scheduled_task'] = database_manager.get_scheduled_task()
     if 'auto_refresh_on' not in st.session_state:
@@ -135,7 +136,8 @@ def report_automation_page():
         scheduled_task = st.session_state['scheduled_task'] # 최신 예약 정보 다시 로드
         if scheduled_task:
             profile_id_to_run = scheduled_task['profile_id']
-            profiles_dict = {p['id']: p for p in st.session_state['search_profiles']}
+            # search_profiles를 항상 최신 DB 정보로 사용
+            profiles_dict = {p['id']: p for p in database_manager.get_search_profiles()}
             profile_to_run = profiles_dict.get(profile_id_to_run)
 
             if profile_to_run:
@@ -468,14 +470,16 @@ def report_automation_page():
             st.markdown("원하는 검색 프리셋과 시간을 설정하여 보고서를 매일 자동으로 수신자에게 전송합니다. (앱이 켜져 있을 때만 작동)")
 
             st.markdown("#### 예약 설정")
+            # search_profiles를 항상 최신 DB 정보로 가져오도록 변경
             available_profiles = database_manager.get_search_profiles()
             profile_options = {p['profile_name']: p['id'] for p in available_profiles}
             profile_names_for_schedule = ["-- 프리셋 선택 --"] + list(profile_options.keys())
 
             current_scheduled_profile_name = "-- 프리셋 선택 --"
-            if st.session_state['scheduled_task'] and st.session_state['search_profiles']:
+            # 예약된 작업이 있고, 해당 profile_id가 현재 available_profiles에 있다면 이름 설정
+            if st.session_state['scheduled_task'] and available_profiles:
                 task_profile_id = st.session_state['scheduled_task']['profile_id']
-                for p in st.session_state['search_profiles']:
+                for p in available_profiles: # available_profiles를 기준으로 찾음
                     if p['id'] == task_profile_id:
                         current_scheduled_profile_name = p['profile_name']
                         break
@@ -605,8 +609,9 @@ def report_automation_page():
 
             if st.session_state['scheduled_task']:
                 task = st.session_state['scheduled_task']
-                profiles_dict = {p['id']: p['profile_name'] for p in st.session_state['search_profiles']}
-                profile_name = profiles_dict.get(task['profile_id'], "알 수 없는 프리셋")
+                # search_profiles를 항상 최신 DB 정보로 가져와서 사용
+                profiles_dict_for_display = {p['id']: p['profile_name'] for p in database_manager.get_search_profiles()}
+                profile_name = profiles_dict_for_display.get(task['profile_id'], "알 수 없는 프리셋") # 여기서 '알 수 없는 프리셋'이 뜨는 원인
                 st.info(f"**프리셋**: {profile_name}\n"
                         f"**전송 시간**: {task['schedule_time']}\n"
                         f"**반복 요일**: {task['schedule_day']}\n"
@@ -859,12 +864,12 @@ def report_automation_page():
             if st.session_state['db_status_type'] == "success":
                 st.success(st.session_state['db_status_message'])
             elif st.session_state['db_status_type'] == "error":
-                st.error(st.session_state['db_status_message'])
+                st.error(st.session_state['db_status_message']) # 메시지 출력으로 변경
             st.session_state['db_status_message'] = ""
             st.session_state['db_status_type'] = ""
         st.markdown("💡 **CSV 파일이 엑셀에서 깨질 경우:** 엑셀에서 '데이터' 탭 -> '텍스트/CSV 가져오기'를 클릭한 후, '원본 파일' 인코딩을 'UTF-8'로 선택하여 가져오세요.")
     with col_db_clear:
-        if st.button("데이터베이스 초기화", help="데이터베이스의 모든 저장된 뉴스를 삭제합니다."):
+        if st.button("데이터베이스 초기화", help="데이터베이스의 모든 저장된 뉴스를 삭제합니다.", type="secondary"):
             database_manager.clear_db_content()
             st.session_state['trending_keywords_data'] = []
             st.session_state['displayed_keywords'] = []
@@ -879,9 +884,9 @@ def report_automation_page():
             st.session_state['formatted_insurance_info'] = ""
             st.session_state['email_status_message'] = ""
             st.session_state['email_status_type'] = ""
-            st.session_state['search_profiles'] = database_manager.get_search_profiles()
-            st.session_state['scheduled_task'] = database_manager.get_scheduled_task()
-            # 데이터베이스 초기화 시 특약 및 문서 텍스트도 초기화
-            database_manager.save_generated_endorsement("")
-            database_manager.save_document_text("") # 문서 텍스트도 초기화 (새로 추가)
+            st.session_state['search_profiles'] = database_manager.get_search_profiles() # 프로필 목록 새로고침
+            st.session_state['scheduled_task'] = database_manager.get_scheduled_task() # 예약 정보 새로고침
+            database_manager.save_generated_endorsement("") # 데이터베이스 특약도 초기화 (새로 추가)
+            database_manager.save_document_text("") # 문서 텍스트도 초기화
             st.rerun()
+
