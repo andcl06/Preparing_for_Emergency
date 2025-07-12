@@ -114,6 +114,9 @@ def trend_analysis_page():
             st.session_state['selected_preset_id'] = None
         if 'recipient_emails_input' not in st.session_state: # 이메일 입력 필드 상태
             st.session_state['recipient_emails_input'] = ""
+        # 새로 추가: 프리셋 로드 후 자동 분석 트리거 플래그
+        if 'trigger_analysis_after_preset_load' not in st.session_state:
+            st.session_state['trigger_analysis_after_preset_load'] = False
 
 
         # --- UI 레이아웃: 검색 조건 (좌) & 키워드 트렌드 결과 (우) ---
@@ -178,6 +181,9 @@ def trend_analysis_page():
                             st.session_state['max_pages_input_display'] = pages_options_reverse.get(selected_preset['max_naver_search_pages_per_day'], "1페이지") # 기본값 1페이지
                             st.session_state['selected_preset_id'] = selected_preset['id'] # 선택된 프리셋 ID 저장
                             st.info(f"✅ 프리셋 '{selected_preset_name}'이(가) 불러와졌습니다.")
+                            
+                            # 새로 추가: 프리셋 로드 후 자동 분석 트리거 플래그 설정
+                            st.session_state['trigger_analysis_after_preset_load'] = True
                             st.rerun()
                     else:
                         st.warning("불러올 프리셋을 선택해주세요.")
@@ -233,7 +239,12 @@ def trend_analysis_page():
 
                 col_submit, col_save_preset = st.columns([0.7, 0.3]) # 프리셋으로 용어 변경
                 with col_submit:
-                    submitted = st.form_submit_button("뉴스 트렌드 분석 시작")
+                    # '뉴스 트렌드 분석 시작' 버튼 클릭 또는 프리셋 로드 후 자동 트리거
+                    submitted_button = st.form_submit_button("뉴스 트렌드 분석 시작")
+                
+                # 폼 제출 조건 변경: 버튼 클릭 또는 자동 트리거 플래그
+                submitted = submitted_button or st.session_state['trigger_analysis_after_preset_load']
+
                 with col_save_preset: # 프리셋으로 용어 변경
                     preset_name_to_save = st.text_input("프리셋 이름 (저장)", value="", help="현재 검색 설정을 저장할 이름을 입력하세요.") # 프리셋으로 용어 변경
                     if st.form_submit_button("프리셋 저장"): # 프리셋으로 용어 변경
@@ -255,7 +266,11 @@ def trend_analysis_page():
             status_message_placeholder = st.empty()
             chart_placeholder = st.empty() # 막대 그래프를 위한 플레이스홀더
 
+            # 폼 제출 조건 변경: submitted 변수 사용
             if submitted:
+                # 자동 트리거 플래그 초기화 (중요! 무한 루프 방지)
+                st.session_state['trigger_analysis_after_preset_load'] = False
+
                 # 새로운 검색 요청 시 기존 상태 초기화
                 st.session_state['trending_keywords_data'] = []
                 st.session_state['displayed_keywords'] = []
@@ -425,7 +440,10 @@ def trend_analysis_page():
                         st.session_state['final_collected_articles'] = temp_collected_articles
 
                         if st.session_state['final_collected_articles']:
-                            status_message_placeholder.success(f"총 {len(st.session_state['final_collected_articles'])}개의 트렌드 기사 요약을 완료했습니다.")
+                            status_message_placeholder.success(
+                                f"총 {len(st.session_state['final_collected_articles'])}개의 트렌드 기사 요약을 완료했습니다. "
+                                "AI 트렌드 요약 및 보험 상품 개발 인사이트 보고서는 아래 '데이터 다운로드' 섹션에서 다운로드할 수 있습니다."
+                            )
 
                             # --- 4. AI가 트렌드 요약 및 보험 상품 개발 인사이트 도출 (분리된 호출) ---
                             status_message_placeholder.info("AI가 트렌드 요약 및 보험 상품 개발 인사이트를 도출 중 (분리된 호출)...")
@@ -556,7 +574,8 @@ def trend_analysis_page():
                 st.rerun()
 
             # --- 결과가 이미 세션 상태에 있는 경우 표시 ---
-            if not st.session_state.get('submitted_flag', False) and \
+            # submitted_button이 False이고, trigger_analysis_after_preset_load가 False이며, analysis_completed가 True일 때만 결과 표시
+            if not submitted_button and not st.session_state.get('trigger_analysis_after_preset_load', False) and \
                st.session_state.get('analysis_completed', False):
                 if st.session_state['displayed_keywords']:
                     df_top_keywords = pd.DataFrame(st.session_state['displayed_keywords'])
@@ -630,8 +649,8 @@ def trend_analysis_page():
                 else:
                     st.info("선택된 기간 내에 유의미한 트렌드 키워드가 식별되지 않았습니다.")
                     chart_placeholder.empty() # 데이터가 없으면 차트도 비움
-            elif not st.session_state.get('submitted_flag', False) and \
-                 not st.session_state.get('analysis_completed', False):
+            # 초기 상태 또는 분석이 완료되지 않은 상태
+            elif not submitted_button and not st.session_state.get('analysis_completed', False):
                 empty_df = pd.DataFrame(columns=['keyword', 'recent_freq', 'past_freq', 'surge_ratio'])
                 # --- 표에 색상 추가 (초기 빈 데이터프레임에도 적용) ---
                 def highlight_header(s):
