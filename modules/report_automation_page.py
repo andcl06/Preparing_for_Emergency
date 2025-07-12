@@ -19,6 +19,9 @@ from modules import trend_analyzer
 from modules import data_exporter
 from modules import email_sender
 
+# KST와 UTC의 시차 (한국은 UTC+9)
+KST_OFFSET_HOURS = 9
+
 def report_automation_page():
     """
     보고서 자동 전송 및 예약 기능을 제공하는 페이지입니다.
@@ -81,37 +84,38 @@ def report_automation_page():
 
 
     # --- 자동 보고서 전송 스케줄러 (앱이 켜져 있을 때만 작동) ---
-    current_dt = datetime.now()
-    current_time_str = current_dt.strftime("%H:%M") # HH:MM
-    current_date_str = current_dt.strftime("%Y-%m-%d") #YYYY-MM-DD
-    current_weekday_korean = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"][current_dt.weekday()] # 현재 요일 (0=월, 6=일)
+    current_dt_utc = datetime.now() # 서버 시간은 UTC
+    current_time_str_utc = current_dt_utc.strftime("%H:%M") # HH:MM (UTC)
+    current_date_str = current_dt_utc.strftime("%Y-%m-%d") #YYYY-MM-DD
+    current_weekday_korean = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"][current_dt_utc.weekday()] # 현재 요일 (0=월, 6=일)
 
     scheduled_task = st.session_state.get('scheduled_task', None) # None으로 초기화될 수 있도록 변경
     
     # 예약된 작업이 실행 중이지 않을 때만 스케줄러를 체크
     if not st.session_state['scheduled_task_running'] and scheduled_task:
-        task_time_str = scheduled_task['schedule_time'] # "HH:MM"
+        # DB에 저장된 시간은 UTC 기준
+        task_time_str_utc = scheduled_task['schedule_time'] # "HH:MM" (UTC)
         task_day = scheduled_task['schedule_day'] # "매일", "월요일" 등
         last_run_date = scheduled_task['last_run_date']
         
         # 디버깅을 위한 출력 (사이드바에 표시 및 콘솔 출력)
-        print(f"DEBUG: Scheduler check - Current time={current_time_str}, Task time={task_time_str}, Task day={task_day}, Current day={current_weekday_korean}, Last run={last_run_date}, Current date={current_date_str}")
+        print(f"DEBUG: Scheduler check - Current time (UTC)={current_time_str_utc}, Task time (UTC)={task_time_str_utc}, Task day={task_day}, Current day={current_weekday_korean}, Last run={last_run_date}, Current date={current_date_str}")
         
         # --- 디버그 로그 추가 시작 ---
-        st.sidebar.write(f"DEBUG: 현재 시간: {current_dt.strftime('%H:%M:%S')}")
-        st.sidebar.write(f"DEBUG: 예약 시간: {task_time_str}")
+        st.sidebar.write(f"DEBUG: 현재 시간 (UTC): {current_dt_utc.strftime('%H:%M:%S')}")
+        st.sidebar.write(f"DEBUG: 예약 시간 (UTC): {task_time_str_utc}")
         st.sidebar.write(f"DEBUG: 예약 요일: {task_day}, 현재 요일: {current_weekday_korean}")
         st.sidebar.write(f"DEBUG: 마지막 실행일: {last_run_date}, 오늘 날짜: {current_date_str}")
         st.sidebar.write(f"DEBUG: scheduled_task_running: {st.session_state['scheduled_task_running']}")
         # --- 디버그 로그 추가 끝 ---
 
-        # 예약 시간 5분 전부터 예약 시간 1분 후까지의 범위에 현재 시간이 포함되는지 확인
+        # 예약 시간 5분 전부터 예약 시간 1분 후까지의 범위에 현재 시간이 포함되는지 확인 (모두 UTC 기준)
         try:
-            task_hour, task_minute = map(int, task_time_str.split(':'))
+            task_hour_utc, task_minute_utc = map(int, task_time_str_utc.split(':'))
             
-            scheduled_dt_today = current_dt.replace(hour=task_hour, minute=task_minute, second=0, microsecond=0)
-            trigger_start_dt = scheduled_dt_today - timedelta(minutes=5)
-            trigger_end_dt = scheduled_dt_today + timedelta(minutes=1) # 예약 시간 1분 후까지 여유를 둠
+            scheduled_dt_today_utc = current_dt_utc.replace(hour=task_hour_utc, minute=task_minute_utc, second=0, microsecond=0)
+            trigger_start_dt_utc = scheduled_dt_today_utc - timedelta(minutes=5)
+            trigger_end_dt_utc = scheduled_dt_today_utc + timedelta(minutes=1) # 예약 시간 1분 후까지 여유를 둠
 
             # 요일 조건 확인
             day_condition_met = False
@@ -121,20 +125,20 @@ def report_automation_page():
                 day_condition_met = True
             
             # --- 디버그 로그 추가 시작 ---
-            st.sidebar.write(f"DEBUG: 트리거 시작: {trigger_start_dt.strftime('%H:%M:%S')}")
-            st.sidebar.write(f"DEBUG: 트리거 종료: {trigger_end_dt.strftime('%H:%M:%S')}")
-            st.sidebar.write(f"DEBUG: 시간 조건 (현재 >= 시작): {current_dt >= trigger_start_dt}")
-            st.sidebar.write(f"DEBUG: 시간 조건 (현재 < 종료): {current_dt < trigger_end_dt}")
+            st.sidebar.write(f"DEBUG: 트리거 시작 (UTC): {trigger_start_dt_utc.strftime('%H:%M:%S')}")
+            st.sidebar.write(f"DEBUG: 트리거 종료 (UTC): {trigger_end_dt_utc.strftime('%H:%M:%S')}")
+            st.sidebar.write(f"DEBUG: 시간 조건 (현재 UTC >= 시작 UTC): {current_dt_utc >= trigger_start_dt_utc}")
+            st.sidebar.write(f"DEBUG: 시간 조건 (현재 UTC < 종료 UTC): {current_dt_utc < trigger_end_dt_utc}")
             st.sidebar.write(f"DEBUG: 날짜 조건 (마지막 실행일 != 오늘): {last_run_date != current_date_str}")
             st.sidebar.write(f"DEBUG: 요일 조건 충족: {day_condition_met}")
             # --- 디버그 로그 추가 끝 ---
 
-            if current_dt >= trigger_start_dt and \
-               current_dt < trigger_end_dt and \
+            if current_dt_utc >= trigger_start_dt_utc and \
+               current_dt_utc < trigger_end_dt_utc and \
                last_run_date != current_date_str and \
                day_condition_met:
-                st.info(f"⏰ 예약된 보고서 전송 시간입니다! ({task_time_str}, {task_day})")
-                print(f"DEBUG: Triggering scheduled task for {task_time_str} on {current_date_str} ({task_day})")
+                st.info(f"⏰ 예약된 보고서 전송 시간입니다! (설정 시간: {task_time_str_utc} UTC, {task_day})") # UTC 시간 명시
+                print(f"DEBUG: Triggering scheduled task for {task_time_str_utc} UTC on {current_date_str} ({task_day})")
                 
                 # 예약 작업 시작 플래그 설정
                 st.session_state['scheduled_task_running'] = True
@@ -454,7 +458,7 @@ def report_automation_page():
             st.session_state['scheduled_task_running'] = False # 작업 중 아님으로 설정
     else:
         # 예약된 작업이 없거나, 예약 시간이 아니거나, 이미 오늘 실행되었을 때의 디버깅 메시지
-        print(f"DEBUG: Scheduler: Not time yet or no task scheduled or already run today. Current time: {current_time_str}, Task time={task_time_str if scheduled_task else 'N/A'}, Last run date={last_run_date if scheduled_task else 'N/A'}, Current date={current_date_str}")
+        print(f"DEBUG: Scheduler: Not time yet or no task scheduled or already run today. Current time: {current_time_str_utc}, Task time={task_time_str_utc if scheduled_task else 'N/A'}, Last run date={last_run_date if scheduled_task else 'N/A'}, Current date={current_date_str}")
 
     # --- 페이지 UI 시작 ---
     # 페이지 전체를 중앙에 배치하기 위한 최상위 컬럼
@@ -495,13 +499,25 @@ def report_automation_page():
             profile_names_for_schedule = ["-- 프리셋 선택 --"] + list(profile_options.keys())
 
             current_scheduled_profile_name = "-- 프리셋 선택 --"
+            displayed_schedule_time_kst = "09:00" # 기본값
             # 예약된 작업이 있고, 해당 profile_id가 현재 available_profiles에 있다면 이름 설정
             if st.session_state['scheduled_task'] and available_profiles:
-                task_profile_id = st.session_state['scheduled_task']['profile_id']
+                task = st.session_state['scheduled_task']
+                task_profile_id = task['profile_id']
                 for p in available_profiles: # available_profiles를 기준으로 찾음
                     if p['id'] == task_profile_id:
                         current_scheduled_profile_name = p['profile_name']
                         break
+                
+                # DB에 저장된 UTC 시간을 KST로 변환하여 표시
+                try:
+                    task_hour_utc, task_minute_utc = map(int, task['schedule_time'].split(':'))
+                    dummy_dt_utc = datetime(2000, 1, 1, task_hour_utc, task_minute_utc) # 더미 날짜 사용
+                    displayed_dt_kst = dummy_dt_utc + timedelta(hours=KST_OFFSET_HOURS)
+                    displayed_schedule_time_kst = displayed_dt_kst.strftime('%H:%M')
+                except ValueError:
+                    st.warning("⚠️ 저장된 예약 시간 형식이 올바르지 않습니다. 기본값으로 표시됩니다.")
+                    displayed_schedule_time_kst = "09:00" # 파싱 오류 시 기본값
 
             selected_schedule_profile_name = st.selectbox(
                 "예약할 검색 프리셋 선택:",
@@ -519,12 +535,12 @@ def report_automation_page():
                 key="schedule_day_selector"
             )
 
-            default_schedule_time = st.session_state['scheduled_task']['schedule_time'] if st.session_state['scheduled_task'] else "09:00"
-            schedule_time_input = st.text_input(
-                "자동 전송 시간 (HH:MM):",
-                value=default_schedule_time,
+            # 사용자 입력은 KST 기준
+            schedule_time_input_kst = st.text_input(
+                "자동 전송 시간 (HH:MM) (한국 시간 기준):",
+                value=displayed_schedule_time_kst, # KST로 변환된 시간 표시
                 max_chars=5,
-                help="예: 09:00 (오전 9시), 14:30 (오후 2시 30분)"
+                help="예: 09:00 (오전 9시), 14:30 (오후 2시 30분). 한국 시간 기준입니다."
             )
 
             default_schedule_emails = st.session_state['scheduled_task']['recipient_emails'] if st.session_state['scheduled_task'] else ""
@@ -540,15 +556,25 @@ def report_automation_page():
                 if st.button("예약 설정/업데이트", help="선택된 프리셋과 시간으로 보고서 자동 전송을 예약합니다."):
                     if selected_schedule_profile_name == "-- 프리셋 선택 --":
                         st.warning("예약할 검색 프리셋을 선택해주세요.")
-                    elif not re.match(r"^(?:2[0-3]|[01]?[0-9]):(?:[0-5]?[0-9])$", schedule_time_input):
+                    elif not re.match(r"^(?:2[0-3]|[01]?[0-9]):(?:[0-5]?[0-9])$", schedule_time_input_kst):
                         st.warning("유효한 시간 형식(HH:MM)을 입력해주세요.")
                     elif not schedule_recipient_emails_input.strip():
                         st.warning("예약 보고서를 받을 수신자 이메일 주소를 입력해주세요.")
                     else:
+                        # KST 입력 시간을 UTC 시간으로 변환하여 저장
+                        try:
+                            input_hour_kst, input_minute_kst = map(int, schedule_time_input_kst.split(':'))
+                            dummy_dt_kst = datetime(2000, 1, 1, input_hour_kst, input_minute_kst)
+                            scheduled_time_utc = dummy_dt_kst - timedelta(hours=KST_OFFSET_HOURS)
+                            scheduled_time_str_utc = scheduled_time_utc.strftime('%H:%M')
+                        except ValueError:
+                            st.error("🚨 입력된 시간 형식이 올바르지 않습니다. 다시 확인해주세요.")
+                            st.stop()
+
                         selected_profile_id_for_schedule = profile_options.get(selected_schedule_profile_name)
                         if selected_profile_id_for_schedule:
-                            if database_manager.save_scheduled_task(selected_profile_id_for_schedule, schedule_time_input, selected_schedule_day, schedule_recipient_emails_input):
-                                st.success(f"✅ 보고서 자동 전송이 '{selected_schedule_day}' '{schedule_time_input}'으로 예약되었습니다. 프리셋: '{selected_schedule_profile_name}'")
+                            if database_manager.save_scheduled_task(selected_profile_id_for_schedule, scheduled_time_str_utc, selected_schedule_day, schedule_recipient_emails_input):
+                                st.success(f"✅ 보고서 자동 전송이 '{selected_schedule_day}' '{schedule_time_input_kst}' (한국 시간)으로 예약되었습니다. 프리셋: '{selected_schedule_profile_name}'")
                                 st.session_state['scheduled_task'] = database_manager.get_scheduled_task() # 예약 정보 새로고침
                                 st.rerun()
                             else:
@@ -631,8 +657,19 @@ def report_automation_page():
                 # search_profiles를 항상 최신 DB 정보로 가져와서 사용
                 profiles_dict_for_display = {p['id']: p['profile_name'] for p in database_manager.get_search_profiles()}
                 profile_name = profiles_dict_for_display.get(task['profile_id'], "알 수 없는 프리셋") # 여기서 '알 수 없는 프리셋'이 뜨는 원인
+                
+                # DB에 저장된 UTC 시간을 KST로 변환하여 표시
+                displayed_task_time_kst = "N/A"
+                try:
+                    task_hour_utc, task_minute_utc = map(int, task['schedule_time'].split(':'))
+                    dummy_dt_utc = datetime(2000, 1, 1, task_hour_utc, task_minute_utc)
+                    displayed_dt_kst = dummy_dt_utc + timedelta(hours=KST_OFFSET_HOURS)
+                    displayed_task_time_kst = displayed_dt_kst.strftime('%H:%M')
+                except ValueError:
+                    st.warning("⚠️ 저장된 예약 시간 형식이 올바르지 않습니다. 확인이 필요합니다.")
+                
                 st.info(f"**프리셋**: {profile_name}\n"
-                        f"**전송 시간**: {task['schedule_time']}\n"
+                        f"**전송 시간**: {displayed_task_time_kst} (한국 시간)\n" # 한국 시간으로 표시
                         f"**반복 요일**: {task['schedule_day']}\n"
                         f"**수신자**: {task['recipient_emails']}\n"
                         f"**마지막 실행일**: {task['last_run_date'] if task['last_run_date'] else '없음'}")
@@ -897,7 +934,7 @@ def report_automation_page():
             st.session_state['ai_trend_summary'] = ""
             st.session_state['ai_insurance_info'] = ""
             st.session_state['submitted_flag'] = False
-            st.session_state['analysis_completed'] = False # <-- 이 부분
+            st.session_state['analysis_completed'] = False
             st.session_state['prettified_report_for_download'] = ""
             st.session_state['formatted_trend_summary'] = ""
             st.session_state['formatted_insurance_info'] = ""
@@ -908,4 +945,3 @@ def report_automation_page():
             database_manager.save_generated_endorsement("") # 데이터베이스 특약도 초기화 (새로 추가)
             database_manager.save_document_text("") # 문서 텍스트도 초기화
             st.rerun()
-
