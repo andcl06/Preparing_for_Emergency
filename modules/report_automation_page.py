@@ -96,6 +96,14 @@ def report_automation_page():
         
         # 디버깅을 위한 출력 (사이드바에 표시 및 콘솔 출력)
         print(f"DEBUG: Scheduler check - Current time={current_time_str}, Task time={task_time_str}, Task day={task_day}, Current day={current_weekday_korean}, Last run={last_run_date}, Current date={current_date_str}")
+        
+        # --- 디버그 로그 추가 시작 ---
+        st.sidebar.write(f"DEBUG: 현재 시간: {current_dt.strftime('%H:%M:%S')}")
+        st.sidebar.write(f"DEBUG: 예약 시간: {task_time_str}")
+        st.sidebar.write(f"DEBUG: 예약 요일: {task_day}, 현재 요일: {current_weekday_korean}")
+        st.sidebar.write(f"DEBUG: 마지막 실행일: {last_run_date}, 오늘 날짜: {current_date_str}")
+        st.sidebar.write(f"DEBUG: scheduled_task_running: {st.session_state['scheduled_task_running']}")
+        # --- 디버그 로그 추가 끝 ---
 
         # 예약 시간 5분 전부터 예약 시간 1분 후까지의 범위에 현재 시간이 포함되는지 확인
         try:
@@ -112,6 +120,15 @@ def report_automation_page():
             elif task_day == current_weekday_korean:
                 day_condition_met = True
             
+            # --- 디버그 로그 추가 시작 ---
+            st.sidebar.write(f"DEBUG: 트리거 시작: {trigger_start_dt.strftime('%H:%M:%S')}")
+            st.sidebar.write(f"DEBUG: 트리거 종료: {trigger_end_dt.strftime('%H:%M:%S')}")
+            st.sidebar.write(f"DEBUG: 시간 조건 (현재 >= 시작): {current_dt >= trigger_start_dt}")
+            st.sidebar.write(f"DEBUG: 시간 조건 (현재 < 종료): {current_dt < trigger_end_dt}")
+            st.sidebar.write(f"DEBUG: 날짜 조건 (마지막 실행일 != 오늘): {last_run_date != current_date_str}")
+            st.sidebar.write(f"DEBUG: 요일 조건 충족: {day_condition_met}")
+            # --- 디버그 로그 추가 끝 ---
+
             if current_dt >= trigger_start_dt and \
                current_dt < trigger_end_dt and \
                last_run_date != current_date_str and \
@@ -160,7 +177,7 @@ def report_automation_page():
                                     "제목": article["제목"],
                                     "링크": article["링크"],
                                     "날짜": article["날짜"].strftime('%Y-%m-%d'),
-                                    "내용": article["내용"]
+                                    "내용": article["내용"] # 오타 수정: '내andung' -> '내용'
                                 }
                                 database_manager.insert_article(article_data_for_db)
                                 all_collected_news_metadata.append(article)
@@ -187,6 +204,8 @@ def report_automation_page():
                             article for article in all_collected_news_metadata
                             if article.get("날짜") and today_date_for_crawl - timedelta(days=profile_to_run['recent_trend_days']) <= article["날짜"]
                         ]
+
+                        # 오타 수정: '내andung' -> '내용'
                         articles_for_ai_summary = []
                         processed_links = set()
                         for article in recent_trending_articles_candidates:
@@ -731,7 +750,7 @@ def report_automation_page():
                         if report_send_success and endorsement_send_success:
                             st.success("✅ 보고서와 특약 이메일이 모두 성공적으로 전송되었습니다!")
                         elif report_send_success:
-                            st.warning("⚠️ 보고서 이메일은 전송되었으나, 특약 이메일 전송에 문제가 있었습니다.")
+                            st.warning("⚠️ 보고서 이메일은 전송되었으나, 특약 전송에 문제가 있었습니다.")
                         elif endorsement_send_success:
                             st.warning("⚠️ 특약 이메일은 전송되었으나, 보고서 전송에 문제가 있었습니다.")
                         else:
@@ -808,7 +827,7 @@ def report_automation_page():
                         st.rerun()
                     elif not email_config_ok:
                         st.session_state['manual_email_status_message'] = "🚨 이메일 설정 정보가 올바르지 않아 이메일을 전송할 수 없습니다."
-                        st.session_state['manual_email_status_type'] = "error"
+                        st.session_state['email_status_type'] = "error"
                         st.rerun()
                     else:
                         with st.spinner("특약 이메일 전송 중..."):
@@ -878,7 +897,7 @@ def report_automation_page():
             st.session_state['ai_trend_summary'] = ""
             st.session_state['ai_insurance_info'] = ""
             st.session_state['submitted_flag'] = False
-            st.session_state['analysis_completed'] = False
+            st.session_state['analysis_completed'] = False # <-- 이 부분
             st.session_state['prettified_report_for_download'] = ""
             st.session_state['formatted_trend_summary'] = ""
             st.session_state['formatted_insurance_info'] = ""
